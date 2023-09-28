@@ -25,7 +25,7 @@ export default class ZOrderCurve implements ICurve2D {
       x |= (z & (1 << (2 * i))) >> i;
       y |= (z & (1 << (2 * i + 1))) >> (i + 1);
     }
-    return { x: x, y: y };
+    return { x, y };
   }
 
   public getIndex(x: number, y: number) {

@@ -6,7 +6,7 @@ export class HeatMapRenderer {
   private fontSize: number;
 
   private colors = [
-    [10, 10, 10],
+    [0, 0, 0],
     [0, 0, 255],
     [0, 255, 0],
     [255, 255, 0],
@@ -14,7 +14,7 @@ export class HeatMapRenderer {
     [255, 0, 0], // red
   ];
 
-  constructor(private map: HeatMap2D, private squareSize: number) {
+  constructor(private map: HeatMap2D, private squareSize: number, public container?: HTMLElement) {
     this.setupCanvas(map.getWidth(), map.getHeight(), squareSize);
   }
 
@@ -22,7 +22,7 @@ export class HeatMapRenderer {
     const canvas = document.createElement("canvas");
     canvas.width = width * squareSize;
     canvas.height = height * squareSize;
-    document.body.appendChild(canvas);
+    (this.container ?? document.body).appendChild(canvas);
     this.canvas = canvas;
     this.context = canvas.getContext("2d");
     this.fontSize = Math.min(24, squareSize * 0.75);
@@ -45,7 +45,8 @@ export class HeatMapRenderer {
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.font = fontSize + "px Arial";
 
-    for (const px of pixels) {
+    for (const id in pixels) {
+      const px = pixels[id];
       const t = px.value / (this.map.getMaxValue() + 0.0001);
       context.fillStyle = this.getHeatColor(t);
       context.fillRect(

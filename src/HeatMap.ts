@@ -15,7 +15,7 @@ export interface IHeatMap {
   getValueAt(x: number, y: number): void;
   update(deltaTime: number): void;
 
-  getPixels(): HeatMapPixel[];
+  getPixels(): { [idx: number]: HeatMapPixel; };
 }
 
 export default class HeatMap2D implements IHeatMap {
@@ -33,7 +33,7 @@ export default class HeatMap2D implements IHeatMap {
   public getHeight = () => this.height;
   public getMaxValue = () => this.maxValue;
   public getMinValue = () => this.minValue;
-  public getPixels = () => Object.values(this.pixels)
+  public getPixels = () => this.pixels;
 
   constructor(
     private width: number,
@@ -41,6 +41,7 @@ export default class HeatMap2D implements IHeatMap {
     private minValue: number = 0,
     private maxValue: number = 255,
     private decayRate: number = 0.01,
+    private containHeat: boolean = true
   ) {
     this.curve = new ZOrderCurve(width, height);
   }
@@ -66,9 +67,12 @@ export default class HeatMap2D implements IHeatMap {
     value: number,
     radius: number = 0
   ) => {
+    // ensure x/y are ints
+    x = Math.floor(x);
+    y = Math.floor(y);
     if (radius === 0) {
       const idx = this.curve.getIndex(x, y);
-      this.pixels[idx] = { x, y, value: (this.pixels[idx]?.value ?? 0) + value };
+      this.pixels[idx] = { x, y, value: (this.pixels[idx]?.value ?? this.minValue) + value };
     } else {
       this.setRadialValueAt(x, y, value, radius, true);
     }
@@ -93,19 +97,17 @@ export default class HeatMap2D implements IHeatMap {
           continue;
         }
 
-        const ratio = 1 - dist / ((radius * radius) + 1e-4);
+        const ratio = 1 - (dist / ((radius * radius) + 1e-4));
 
         var idx = this.curve.getIndex(originX + x, originY + y);
-        const val = value * ratio; //this.maxValue * ratio;
+        const val = value * ratio;
 
-        let nextVal = val;
+        let nextVal = Math.max(val, this.minValue);
 
         if (add) {
           nextVal += pixels[idx]?.value ?? this.minValue;
-        } else {
-          nextVal += Math.max(this.maxValue, pixels[idx]?.value ?? this.minValue);
         }
-        // nextVal = nextVal | 0;
+        nextVal = this.clampMinMax(nextVal);
         pixels[idx] = { x: originX + x, y: originY + y, value: nextVal };
       }
     }
@@ -116,36 +118,59 @@ export default class HeatMap2D implements IHeatMap {
     return this.pixels[idx]?.value ?? this.minValue;
   };
 
-  private boxBlur = (amount: number = 1) => {
+  private kernel: [number[], number[], number[]] = [
+    // [0.05, 0.1, 0.05],
+    // [0.1, 1, 0.1],
+    // [0.05, 0.1, 0.05]
+
+    // no blur
+    // [0, 0, 0],
+    // [0, 1, 0],
+    // [0, 0, 0]
+
+    [Math.sqrt(2) / 2, 1, Math.sqrt(2) / 2],
+    [1, 1, 1],
+    [Math.sqrt(2) / 2, 1, Math.sqrt(2) / 2]
+
+    // [1, 1, 1],
+    // [1, -8, 1],
+    // [1, 1, 1]
+  ];
+
+
+  private boxBlur = () => {
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         const pxId = this.curve.getIndex(x, y);
-
+        let runningValue = 0;
+        let totalWeight = 0;
         var tX;
         var tY;
-        var averagedValue = 0;
-        var count = 0;
-        for (let blurY = -amount; blurY <= amount; blurY++) {
-          for (let blurX = -amount; blurX <= amount; blurX++) {
+        for (let blurY = -1; blurY <= 1; blurY++) {
+          for (let blurX = -1; blurX <= 1; blurX++) {
             tX = x + blurX;
             tY = y + blurY;
-            count += 1;
+
+            const weight = this.kernel[blurY + 1][blurX + 1];
 
             if (tX < 0 || tY < 0 || tX >= this.width || tY >= this.height) {
-              averagedValue += this.minValue;
+              if (this.containHeat) {
+                totalWeight += weight;
+                runningValue += this.minValue * weight;
+              }
             } else {
-              var idx = this.curve.getIndex(tX, tY);
-              var value = this.pixels[idx]?.value || this.minValue;
-              averagedValue += value;
+              totalWeight += weight;
+              const idx = this.curve.getIndex(tX, tY);
+              const value = this.pixels[idx]?.value || this.minValue;
+              runningValue += value * weight;
             }
           }
         }
 
-        // The `|0` floor here is actually pretty important. Without it, the values never actually
-        // hit zero and the map will have persistent values in those cells, even after it should
-        // have dissipated.
-        let nextVal = this.clampMinMax((averagedValue / count) | 0);
-        // nextVal *= 0.75;
+        let nextVal = totalWeight === 0 ? 0 : (runningValue / totalWeight);  // now it is a weighted average
+        nextVal *= (1 - this.decayRate);
+        nextVal = this.clampMinMax(nextVal);
+
 
         this.observedMaxValue = nextVal > this.observedMaxValue ? nextVal : this.observedMaxValue;
         this.observedMinValue = nextVal < this.observedMinValue ? nextVal : this.observedMinValue;
@@ -165,14 +190,11 @@ export default class HeatMap2D implements IHeatMap {
 
 
   private stepDelta = 0;
-  private fixedTimeStep = 1000/24;
+  private fixedTimeStep = 1000 / 24;
   public update = (deltaTime: number) => {
     this.stepDelta += deltaTime;
-
-    if(this.stepDelta > this.fixedTimeStep * 5) {
-      this.boxBlur();
-      this.stepDelta = 0;
-      return;
+    if (this.stepDelta > this.fixedTimeStep * 50) {
+      this.stepDelta = this.fixedTimeStep * 50;
     }
 
     while (this.stepDelta >= this.fixedTimeStep) {
